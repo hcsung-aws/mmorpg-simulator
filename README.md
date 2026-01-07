@@ -2,6 +2,8 @@
 
 패킷 캡처 및 재현 테스트를 위한 간단한 MMORPG 시뮬레이터입니다.
 
+**관련 프로젝트:** [Packet Capture Log Agent](https://github.com/hcsung-aws/packet-capture-log-agent) - 이 시뮬레이터의 패킷을 캡처/재현하는 도구
+
 [English](#english)
 
 ## 개요
@@ -121,6 +123,8 @@ MIT License
 ---
 
 # English
+
+**Related Project:** [Packet Capture Log Agent](https://github.com/hcsung-aws/packet-capture-log-agent) - Tool for capturing/replaying packets from this simulator
 
 ## Overview
 
