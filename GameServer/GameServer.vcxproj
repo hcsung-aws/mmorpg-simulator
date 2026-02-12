@@ -15,6 +15,7 @@
     <ProjectGuid>{A1B2C3D4-1234-5678-9ABC-DEF012345678}</ProjectGuid>
     <RootNamespace>GameServer</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <VcpkgEnabled>false</VcpkgEnabled>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
@@ -87,5 +88,8 @@
     <ClInclude Include="..\Common\Protocol.h" />
     <ClInclude Include="..\Common\Types.h" />
   </ItemGroup>
+  <PropertyGroup>
+    <PostBuildEvent>"C:\Program Files\Python313\python.exe" "$(SolutionDir)scripts\generate_protocol.py" "$(SolutionDir)Common\Protocol.h" "$(SolutionDir)..\packet-capture-log-agent\protocols\mmorpg_simulator.json"</PostBuildEvent>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

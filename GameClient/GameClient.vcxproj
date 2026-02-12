@@ -15,6 +15,7 @@
     <ProjectGuid>{B2C3D4E5-2345-6789-ABCD-EF0123456789}</ProjectGuid>
     <RootNamespace>GameClient</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <VcpkgEnabled>false</VcpkgEnabled>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">

@@ -22,21 +22,30 @@ enum PacketType : uint16_t {
     SC_LOGOUT_RESULT = 0x0104,
 
     // Character (0x02xx)
-    CS_CHAR_SELECT = 0x0203,
-    SC_CHAR_INFO = 0x0204,
-    SC_CHAR_LEAVE = 0x0205,
+    CS_CHAR_LIST = 0x0201,
+    SC_CHAR_LIST = 0x0202,
+    CS_CHAR_CREATE = 0x0203,
+    SC_CHAR_CREATE_RESULT = 0x0204,
+    CS_CHAR_SELECT = 0x0205,
+    SC_CHAR_INFO = 0x0206,
+    SC_CHAR_LEAVE = 0x0207,
 
-    // Move (0x03xx)
-    CS_MOVE = 0x0301,
-    SC_MOVE_RESULT = 0x0302,
+    // Attendance (0x03xx)
+    CS_ATTENDANCE_CHECK = 0x0301,
+    SC_ATTENDANCE_INFO = 0x0302,
+    SC_ATTENDANCE_RESULT = 0x0303,
 
-    // Combat (0x04xx)
-    CS_ATTACK = 0x0401,
-    SC_ATTACK_RESULT = 0x0402,
-    SC_NPC_SPAWN = 0x0403,
-    SC_NPC_DEATH = 0x0404,
-    SC_EXP_UPDATE = 0x0405,
-    SC_LEVEL_UP = 0x0406,
+    // Move (0x04xx)
+    CS_MOVE = 0x0401,
+    SC_MOVE_RESULT = 0x0402,
+
+    // Combat (0x05xx)
+    CS_ATTACK = 0x0501,
+    SC_ATTACK_RESULT = 0x0502,
+    SC_NPC_SPAWN = 0x0503,
+    SC_NPC_DEATH = 0x0504,
+    SC_EXP_UPDATE = 0x0505,
+    SC_LEVEL_UP = 0x0506,
 
     // System (0xFFxx)
     CS_HEARTBEAT = 0xFF01,
@@ -59,7 +68,36 @@ struct SC_LoginResult {
     char message[64];
 };
 
-// Character
+// Character List
+struct SC_CharListEntry {
+    uint64_t charUid;
+    char name[20];
+    uint8_t charType;
+    uint16_t level;
+};
+
+struct SC_CharList {
+    uint8_t count;
+    SC_CharListEntry chars[5];  // max 5 characters
+};
+
+struct CS_CharCreate {
+    uint64_t charUid;  // client generates: accountUid * 1000 + index
+    char name[20];
+    uint8_t charType;
+};
+
+struct SC_CharCreateResult {
+    uint8_t success;
+    uint64_t charUid;
+    char message[32];
+};
+
+struct CS_CharSelect {
+    uint64_t charUid;
+};
+
+// Character Info
 struct SC_CharInfo {
     uint64_t charUid;
     char name[32];
@@ -69,6 +107,7 @@ struct SC_CharInfo {
     int16_t posY;
     uint16_t hp;
     uint16_t maxHp;
+    uint64_t gold;
 };
 
 struct SC_CharLeave {
@@ -130,6 +169,17 @@ struct SC_LevelUp {
     uint16_t maxHp;
     uint16_t atk;
     uint16_t def;
+};
+
+// Attendance
+struct SC_AttendanceInfo {
+    uint8_t todayAttended;    // 0=not yet, 1=already attended
+    uint32_t rewardGold;      // reward amount
+};
+
+struct SC_AttendanceResult {
+    uint8_t success;          // 0=fail, 1=success
+    uint32_t rewardGold;      // gold received
 };
 
 #pragma pack(pop)

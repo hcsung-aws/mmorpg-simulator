@@ -12,8 +12,11 @@ struct PlayerData {
     uint16_t level = 1;
     uint16_t hp = 100, maxHp = 100;
     uint16_t atk = 15, def = 5;
-    uint32_t exp = 0, maxExp = 100;
+    uint64_t exp = 0;
+    uint32_t maxExp = 100;
+    uint64_t gold = 0;
     AccountUid accountUid = 0;
+    uint64_t charUid = 0;
     bool loggedIn = false;
 };
 

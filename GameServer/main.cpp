@@ -12,6 +12,9 @@
 constexpr int MAP_SIZE = 20;
 constexpr int MAX_NPC = 5;
 
+// Forward declarations
+void SendAttendanceInfo(std::shared_ptr<Session> session);
+
 struct NPC {
     uint64_t uid;
     int16_t posX, posY;
@@ -66,6 +69,7 @@ void SendCharInfo(std::shared_ptr<Session> session) {
     info.posY = player.posY;
     info.hp = player.hp;
     info.maxHp = player.maxHp;
+    info.gold = player.gold;
     session->Send(SC_CHAR_INFO, &info, sizeof(info));
 }
 
@@ -117,6 +121,43 @@ void CheckLevelUp(std::shared_ptr<Session> session) {
     }
 }
 
+void SendCharList(std::shared_ptr<Session> session) {
+    auto& player = session->GetPlayer();
+    SC_CharList list{};
+    list.count = 0;
+    
+    std::wstring procCall = L"CALL spCharacterList(" + std::to_wstring(player.accountUid) + L")";
+    
+    dbConn.ExecuteProc(procCall, nullptr,
+        [&](SQLHSTMT hStmt) -> bool {
+            SQLBIGINT charUid;
+            char charName[21] = {0};
+            SQLCHAR charType;
+            SQLINTEGER level;
+            SQLBIGINT exp;
+            SQLLEN ind1, ind2, ind3, ind4, ind5;
+            
+            SQLBindCol(hStmt, 1, SQL_C_SBIGINT, &charUid, 0, &ind1);
+            SQLBindCol(hStmt, 2, SQL_C_CHAR, charName, sizeof(charName), &ind2);
+            SQLBindCol(hStmt, 3, SQL_C_UTINYINT, &charType, 0, &ind3);
+            SQLBindCol(hStmt, 4, SQL_C_SLONG, &level, 0, &ind4);
+            SQLBindCol(hStmt, 5, SQL_C_SBIGINT, &exp, 0, &ind5);
+            
+            while (SQLFetch(hStmt) == SQL_SUCCESS && list.count < 5) {
+                auto& entry = list.chars[list.count];
+                entry.charUid = charUid;
+                strncpy_s(entry.name, charName, 20);
+                entry.charType = charType;
+                entry.level = (uint16_t)level;
+                list.count++;
+            }
+            return true;
+        });
+    
+    session->Send(SC_CHAR_LIST, &list, sizeof(list));
+    std::cout << "[Server] Sent char list: " << (int)list.count << " characters" << std::endl;
+}
+
 void OnLogin(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
     CS_Login login;
     memcpy(&login, payload, sizeof(login));
@@ -124,18 +165,15 @@ void OnLogin(std::shared_ptr<Session> session, PacketHeader* header, char* paylo
 
     auto& player = session->GetPlayer();
     
-    // ChannelType=0 (Guest), ChannelId from accountId
     uint8_t channelType = 0;
     int64_t channelId = std::atoll(login.accountId);
     if (channelId <= 0) {
-        // String ID - use hash
         channelId = (std::hash<std::string>{}(login.accountId) % 900000000) + 100000000;
     }
     
     int64_t accountUid = 0;
     int64_t charUid = 0;
     
-    // Call spAccountLogin - returns result via SELECT
     std::wstring procCall = L"CALL spAccountLogin(" + std::to_wstring(channelType) + L", " 
                           + std::to_wstring(channelId) + L")";
     
@@ -155,31 +193,178 @@ void OnLogin(std::shared_ptr<Session> session, PacketHeader* header, char* paylo
     SC_LoginResult result{};
     
     if (dbResult == 0 && accountUid > 0) {
-        std::cout << "[Server] DB Login OK - AccountUid: " << accountUid << ", CharUid: " << charUid << std::endl;
+        std::cout << "[Server] DB Login OK - AccountUid: " << accountUid << std::endl;
         player.accountUid = accountUid;
         result.success = 1;
         strcpy_s(result.message, "Login successful");
     } else {
         std::cout << "[Server] DB Login failed for ID: " << channelId << std::endl;
-        player.accountUid = channelId; // fallback
+        player.accountUid = channelId;
         result.success = 1;
         strcpy_s(result.message, "Login (no DB)");
     }
-    
-    player.loggedIn = true;
-    player.posX = 5 + (rand() % 10);
-    player.posY = 5 + (rand() % 10);
 
     result.accountUid = player.accountUid;
     session->Send(SC_LOGIN_RESULT, &result, sizeof(result));
     
-    SendCharInfo(session);
-    SendAllNPCs(session);
-    SendOtherPlayers(session);
+    // Send character list instead of entering game directly
+    SendCharList(session);
+}
+
+void OnCharList(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
+    SendCharList(session);
+}
+
+void OnCharCreate(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
+    CS_CharCreate req;
+    memcpy(&req, payload, sizeof(req));
+    
+    auto& player = session->GetPlayer();
+    std::cout << "[Server] Create char: " << req.name << " (Type " << (int)req.charType << ")" << std::endl;
+    
+    SC_CharCreateResult result{};
+    
+    std::wstring procCall = L"CALL spCharacterCreate(" 
+        + std::to_wstring(player.accountUid) + L", "
+        + std::to_wstring(req.charUid) + L", '"
+        + std::wstring(req.name, req.name + strlen(req.name)) + L"', "
+        + std::to_wstring(req.charType) + L")";
+    
+    int dbResult = dbConn.ExecuteProc(procCall, nullptr,
+        [&](SQLHSTMT hStmt) -> bool {
+            SQLBIGINT uid = 0;
+            SQLLEN ind;
+            SQLBindCol(hStmt, 1, SQL_C_SBIGINT, &uid, 0, &ind);
+            if (SQLFetch(hStmt) == SQL_SUCCESS) {
+                result.charUid = uid;
+            }
+            return true;
+        });
+    
+    if (dbResult == 0 && result.charUid > 0) {
+        result.success = 1;
+        strcpy_s(result.message, "Character created");
+        std::cout << "[Server] Character created: " << result.charUid << std::endl;
+    } else {
+        result.success = 0;
+        strcpy_s(result.message, "Create failed");
+        std::cout << "[Server] Character create failed" << std::endl;
+    }
+    
+    session->Send(SC_CHAR_CREATE_RESULT, &result, sizeof(result));
+    
+    if (result.success) {
+        SendCharList(session);
+    }
+}
+
+void OnCharSelect(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
+    CS_CharSelect req;
+    memcpy(&req, payload, sizeof(req));
+    
+    auto& player = session->GetPlayer();
+    std::cout << "[Server] Select char: " << req.charUid << std::endl;
+    
+    // Call spCharacterLogin
+    std::wstring procCall = L"CALL spCharacterLogin(" 
+        + std::to_wstring(player.accountUid) + L", "
+        + std::to_wstring(req.charUid) + L")";
+    
+    bool success = false;
+    int level = 1;
+    int64_t exp = 0;
+    int64_t gold = 0;
+    
+    dbConn.ExecuteProc(procCall, nullptr,
+        [&](SQLHSTMT hStmt) -> bool {
+            SQLINTEGER lv = 1;
+            SQLBIGINT ex = 0, gd = 0;
+            SQLLEN ind1, ind2, ind3;
+            SQLBindCol(hStmt, 1, SQL_C_SLONG, &lv, 0, &ind1);
+            SQLBindCol(hStmt, 2, SQL_C_SBIGINT, &ex, 0, &ind2);
+            SQLBindCol(hStmt, 3, SQL_C_SBIGINT, &gd, 0, &ind3);
+            if (SQLFetch(hStmt) == SQL_SUCCESS) {
+                level = lv;
+                exp = ex;
+                gold = gd;
+                success = true;
+            }
+            return true;
+        });
+    
+    if (success) {
+        player.charUid = req.charUid;
+        player.loggedIn = true;
+        player.level = level;
+        player.exp = exp;
+        player.gold = gold;
+        player.posX = 5 + (rand() % 10);
+        player.posY = 5 + (rand() % 10);
+        
+        SendCharInfo(session);
+        SendAllNPCs(session);
+        SendOtherPlayers(session);
+        SendAttendanceInfo(session);
+        
+        std::cout << "[Server] Character selected (Lv." << level << " Gold:" << gold << ")" << std::endl;
+    } else {
+        SC_Error err{};
+        err.errorCode = 1;
+        strcpy_s(err.message, "Character not found");
+        session->Send(SC_ERROR, &err, sizeof(err));
+    }
 }
 
 void OnHeartbeat(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
     session->Send(SC_HEARTBEAT, nullptr, 0);
+}
+
+void SendAttendanceInfo(std::shared_ptr<Session> session) {
+    auto& player = session->GetPlayer();
+    SC_AttendanceInfo info{};
+    
+    std::wstring procCall = L"CALL spAttendanceInfo(" + std::to_wstring(player.charUid) + L")";
+    
+    dbConn.ExecuteProc(procCall, nullptr,
+        [&](SQLHSTMT hStmt) -> bool {
+            SQLCHAR attended = 0;
+            SQLINTEGER gold = 0;
+            SQLLEN ind1, ind2;
+            SQLBindCol(hStmt, 1, SQL_C_UTINYINT, &attended, 0, &ind1);
+            SQLBindCol(hStmt, 2, SQL_C_SLONG, &gold, 0, &ind2);
+            if (SQLFetch(hStmt) == SQL_SUCCESS) {
+                info.todayAttended = attended;
+                info.rewardGold = gold;
+            }
+            return true;
+        });
+    
+    session->Send(SC_ATTENDANCE_INFO, &info, sizeof(info));
+    std::cout << "[Server] Attendance info sent: attended=" << (int)info.todayAttended << std::endl;
+}
+
+void OnAttendanceCheck(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
+    auto& player = session->GetPlayer();
+    SC_AttendanceResult result{};
+    
+    std::wstring procCall = L"CALL spAttendanceCheck(" + std::to_wstring(player.charUid) + L")";
+    
+    dbConn.ExecuteProc(procCall, nullptr,
+        [&](SQLHSTMT hStmt) -> bool {
+            SQLCHAR success = 0;
+            SQLINTEGER gold = 0;
+            SQLLEN ind1, ind2;
+            SQLBindCol(hStmt, 1, SQL_C_UTINYINT, &success, 0, &ind1);
+            SQLBindCol(hStmt, 2, SQL_C_SLONG, &gold, 0, &ind2);
+            if (SQLFetch(hStmt) == SQL_SUCCESS) {
+                result.success = success;
+                result.rewardGold = gold;
+            }
+            return true;
+        });
+    
+    session->Send(SC_ATTENDANCE_RESULT, &result, sizeof(result));
+    std::cout << "[Server] Attendance check: success=" << (int)result.success << " gold=" << result.rewardGold << std::endl;
 }
 
 void OnMove(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
@@ -209,15 +394,20 @@ void OnMove(std::shared_ptr<Session> session, PacketHeader* header, char* payloa
 }
 
 void OnAttack(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
+    CS_Attack atk;
+    memcpy(&atk, payload, sizeof(atk));
+    
     auto& player = session->GetPlayer();
     
+    // Find target NPC by uid
     NPC* target = nullptr;
     for (int i = 0; i < MAX_NPC; i++) {
-        if (!npcs[i].alive) continue;
-        int dx = abs(npcs[i].posX - player.posX);
-        int dy = abs(npcs[i].posY - player.posY);
-        if (dx <= 1 && dy <= 1 && (dx + dy) > 0) {
-            target = &npcs[i];
+        if (npcs[i].alive && npcs[i].uid == atk.targetUid) {
+            int dx = abs(npcs[i].posX - player.posX);
+            int dy = abs(npcs[i].posY - player.posY);
+            if (dx <= 1 && dy <= 1) {
+                target = &npcs[i];
+            }
             break;
         }
     }
@@ -291,6 +481,10 @@ int main() {
         
         PacketHandler packetHandler;
         packetHandler.AddHandler(CS_LOGIN, OnLogin);
+        packetHandler.AddHandler(CS_CHAR_LIST, OnCharList);
+        packetHandler.AddHandler(CS_CHAR_CREATE, OnCharCreate);
+        packetHandler.AddHandler(CS_CHAR_SELECT, OnCharSelect);
+        packetHandler.AddHandler(CS_ATTENDANCE_CHECK, OnAttendanceCheck);
         packetHandler.AddHandler(CS_HEARTBEAT, OnHeartbeat);
         packetHandler.AddHandler(CS_MOVE, OnMove);
         packetHandler.AddHandler(CS_ATTACK, OnAttack);
