@@ -47,6 +47,25 @@ enum PacketType : uint16_t {
     SC_EXP_UPDATE = 0x0505,
     SC_LEVEL_UP = 0x0506,
 
+    // Chat (0x06xx)
+    CS_CHAT = 0x0601,
+    SC_CHAT = 0x0602,
+
+    // Item (0x07xx)
+    SC_ITEM_DROP = 0x0701,
+    CS_ITEM_USE = 0x0702,
+    SC_ITEM_USE_RESULT = 0x0703,
+    CS_ITEM_EQUIP = 0x0704,
+    SC_EQUIP_RESULT = 0x0705,
+    SC_INVENTORY_UPDATE = 0x0706,
+
+    // Shop (0x08xx)
+    CS_SHOP_OPEN = 0x0801,
+    SC_SHOP_LIST = 0x0802,
+    CS_SHOP_BUY = 0x0803,
+    SC_SHOP_RESULT = 0x0804,
+    CS_SHOP_SELL = 0x0805,
+
     // System (0xFFxx)
     CS_HEARTBEAT = 0xFF01,
     SC_HEARTBEAT = 0xFF02,
@@ -156,6 +175,7 @@ struct SC_NpcSpawn {
 struct SC_NpcDeath {
     uint64_t npcUid;
     uint32_t expReward;
+    uint32_t goldReward;
 };
 
 struct SC_ExpUpdate {
@@ -171,6 +191,58 @@ struct SC_LevelUp {
     uint16_t def;
 };
 
+// Chat
+struct CS_Chat {
+    uint8_t channel;        // 0=World, 1=Whisper
+    char targetName[20];    // Whisper target (channel==1)
+    char message[128];
+};
+
+struct SC_Chat {
+    uint8_t channel;
+    char senderName[20];
+    char message[128];
+};
+
+// Item
+struct SC_ItemDrop {
+    uint8_t slot;
+    uint16_t itemId;
+    char itemName[32];
+};
+
+struct CS_ItemUse {
+    uint8_t slot;
+};
+
+struct SC_ItemUseResult {
+    uint64_t charUid;
+    char charName[20];
+    char itemName[32];
+    uint8_t effectType;     // 0=hp
+    uint16_t effectValue;
+};
+
+struct CS_ItemEquip {
+    uint8_t slot;
+};
+
+struct SC_EquipResult {
+    uint8_t success;
+    uint8_t slot;
+    uint16_t atk;
+    uint16_t def;
+    char weaponName[32];
+    char armorName[32];
+    char message[32];
+};
+
+struct SC_InventoryUpdate {
+    uint8_t slot;
+    uint16_t itemId;        // 0=empty
+    char itemName[32];
+};
+
 // Attendance
 struct SC_AttendanceInfo {
     uint8_t todayAttended;    // 0=not yet, 1=already attended
@@ -180,6 +252,33 @@ struct SC_AttendanceInfo {
 struct SC_AttendanceResult {
     uint8_t success;          // 0=fail, 1=success
     uint32_t rewardGold;      // gold received
+};
+
+// Shop
+struct SC_ShopEntry {
+    uint16_t itemId;
+    char itemName[32];
+    uint32_t price;
+};
+
+struct SC_ShopList {
+    uint8_t count;
+    SC_ShopEntry items[10];   // max 10 shop items
+};
+
+struct CS_ShopBuy {
+    uint16_t itemId;
+};
+
+struct SC_ShopResult {
+    uint8_t success;          // 0=fail, 1=bought, 2=sold
+    uint16_t itemId;
+    uint64_t remainGold;
+    char message[32];
+};
+
+struct CS_ShopSell {
+    uint8_t slot;
 };
 
 #pragma pack(pop)

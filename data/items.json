@@ -1,0 +1,14 @@
+{
+  "items": [
+    {"id": 1, "name": "Rusty Sword", "type": "weapon", "atk": 5, "price": 50},
+    {"id": 2, "name": "Steel Sword", "type": "weapon", "atk": 12, "price": 200},
+    {"id": 3, "name": "Leather Armor", "type": "armor", "def": 5, "price": 80},
+    {"id": 4, "name": "Iron Armor", "type": "armor", "def": 10, "price": 300},
+    {"id": 5, "name": "HP Potion", "type": "consumable", "hp": 50, "price": 30}
+  ],
+  "dropTable": [
+    {"itemId": 1, "weight": 20},
+    {"itemId": 3, "weight": 20},
+    {"itemId": 5, "weight": 40}
+  ]
+}

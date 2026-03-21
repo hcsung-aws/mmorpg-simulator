@@ -8,6 +8,7 @@
 using boost::asio::ip::tcp;
 
 struct PlayerData {
+    char name[20] = {};
     int16_t posX = 10, posY = 10;
     uint16_t level = 1;
     uint16_t hp = 100, maxHp = 100;

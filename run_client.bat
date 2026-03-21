@@ -1,0 +1,3 @@
+@echo off
+echo Starting GameClient...
+build\GameClient.exe %*

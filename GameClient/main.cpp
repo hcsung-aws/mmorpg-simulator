@@ -1,5 +1,6 @@
 #include "TcpClient.h"
 #include <iostream>
+#include <string>
 #include <cstring>
 #include <conio.h>
 #include <map>
@@ -52,6 +53,37 @@ struct NPC {
 std::map<uint64_t, NPC> npcs;
 
 std::string lastMsg;
+std::vector<std::string> chatLog;
+constexpr int MAX_CHAT_LOG = 5;
+bool chatMode = false;
+
+// Inventory
+constexpr int MAX_INVENTORY = 20;
+struct InvSlot { uint16_t itemId = 0; char name[32] = {}; };
+InvSlot inventory[MAX_INVENTORY];
+bool showInventory = false;
+char equippedWeapon[32] = {};
+char equippedArmor[32] = {};
+
+int ReadSlot(const char* prompt) {
+    std::cout << prompt;
+    std::string input;
+    while (true) {
+        char c = _getch();
+        if (c == '\r') break;
+        if (c == 27) { input.clear(); break; }
+        if (c >= '0' && c <= '9') { input += c; std::cout << c; }
+    }
+    std::cout << std::endl;
+    if (input.empty()) return -1;
+    return std::stoi(input);
+}
+
+// Shop
+struct ShopItem { uint16_t itemId; char name[32]; uint32_t price; };
+ShopItem shopItems[10];
+int shopCount = 0;
+bool showShop = false;
 
 void DrawCharSelect() {
     system("cls");
@@ -107,8 +139,25 @@ void DrawMap() {
         std::cout << "[T] Attendance Check (+" << attendance.rewardGold << " Gold)\n";
     }
     if (!lastMsg.empty()) std::cout << lastMsg << "\n";
+    for (auto& line : chatLog) std::cout << line << "\n";
+    if (showInventory) {
+        std::cout << "--- Inventory (U=Use E=Equip X=Sell ESC=Close) ---\n";
+        std::cout << " [Weapon] " << (equippedWeapon[0] ? equippedWeapon : "None") << "\n";
+        std::cout << " [Armor]  " << (equippedArmor[0] ? equippedArmor : "None") << "\n";
+        for (int i = 0; i < MAX_INVENTORY; i++) {
+            if (inventory[i].itemId)
+                std::cout << " " << i << ": " << inventory[i].name << "\n";
+        }
+        std::cout << "-------------------------------------------\n";
+    }
+    if (showShop) {
+        std::cout << "--- Shop (1-9=Buy S+slot=Sell ESC=Close) ---\n";
+        for (int i = 0; i < shopCount; i++)
+            std::cout << " " << (i+1) << ": " << shopItems[i].name << " (" << shopItems[i].price << "G)\n";
+        std::cout << "-------------------------------------------\n";
+    }
     std::cout << "@ = You, P = Other Player, N = NPC\n";
-    std::cout << "WASD=Move SPACE=Attack T=Attendance Q=Quit\n";
+    std::cout << "WASD=Move SPACE=Attack I=Inventory B=Shop T=Attendance ENTER=Chat Q=Quit\n";
 }
 
 void OnLoginResult(const PacketHeader& header, const char* payload) {
@@ -209,7 +258,8 @@ void OnNpcDeath(const PacketHeader& header, const char* payload) {
     SC_NpcDeath death;
     memcpy(&death, payload, sizeof(death));
     npcs.erase(death.npcUid);
-    lastMsg = "NPC defeated! +" + std::to_string(death.expReward) + " EXP";
+    lastMsg = "NPC defeated! +" + std::to_string(death.expReward) + " EXP +" + std::to_string(death.goldReward) + " Gold";
+    myPlayer.gold += death.goldReward;
     if (gameState == GameState::InGame) DrawMap();
 }
 
@@ -269,6 +319,86 @@ void OnAttendanceResult(const PacketHeader& header, const char* payload) {
     if (gameState == GameState::InGame) DrawMap();
 }
 
+void OnItemDrop(const PacketHeader& header, const char* payload) {
+    SC_ItemDrop drop;
+    memcpy(&drop, payload, sizeof(drop));
+    if (drop.slot < MAX_INVENTORY) {
+        inventory[drop.slot].itemId = drop.itemId;
+        strncpy_s(inventory[drop.slot].name, drop.itemName, 31);
+    }
+    lastMsg = "Dropped: " + std::string(drop.itemName) + " [slot " + std::to_string(drop.slot) + "]";
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnItemUseResult(const PacketHeader& header, const char* payload) {
+    SC_ItemUseResult res;
+    memcpy(&res, payload, sizeof(res));
+    lastMsg = std::string(res.charName) + " used " + res.itemName + " (+" + std::to_string(res.effectValue) + " HP)";
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnEquipResult(const PacketHeader& header, const char* payload) {
+    SC_EquipResult res;
+    memcpy(&res, payload, sizeof(res));
+    if (res.success) {
+        myPlayer.atk = res.atk;
+        myPlayer.def = res.def;
+        strncpy_s(equippedWeapon, res.weaponName, 31);
+        strncpy_s(equippedArmor, res.armorName, 31);
+        lastMsg = "Equipped! ATK:" + std::to_string(res.atk) + " DEF:" + std::to_string(res.def);
+    } else {
+        lastMsg = std::string(res.message);
+    }
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnInventoryUpdate(const PacketHeader& header, const char* payload) {
+    SC_InventoryUpdate upd;
+    memcpy(&upd, payload, sizeof(upd));
+    if (upd.slot < MAX_INVENTORY) {
+        inventory[upd.slot].itemId = upd.itemId;
+        if (upd.itemId) strncpy_s(inventory[upd.slot].name, upd.itemName, 31);
+        else memset(inventory[upd.slot].name, 0, 32);
+    }
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnShopList(const PacketHeader& header, const char* payload) {
+    SC_ShopList list;
+    memcpy(&list, payload, sizeof(list));
+    shopCount = list.count;
+    for (int i = 0; i < shopCount; i++) {
+        shopItems[i].itemId = list.items[i].itemId;
+        strncpy_s(shopItems[i].name, list.items[i].itemName, 31);
+        shopItems[i].price = list.items[i].price;
+    }
+    showShop = true;
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnShopResult(const PacketHeader& header, const char* payload) {
+    SC_ShopResult res;
+    memcpy(&res, payload, sizeof(res));
+    myPlayer.gold = res.remainGold;
+    if (res.success == 1)
+        lastMsg = "Bought: " + std::string(res.message) + " (Gold:" + std::to_string(res.remainGold) + ")";
+    else if (res.success == 2)
+        lastMsg = "Sold: " + std::string(res.message) + " (Gold:" + std::to_string(res.remainGold) + ")";
+    else
+        lastMsg = std::string("Shop: ") + res.message;
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnChatMsg(const PacketHeader& header, const char* payload) {
+    SC_Chat chat;
+    memcpy(&chat, payload, sizeof(chat));
+    std::string prefix = (chat.channel == 0) ? "[World]" : "[Whisper]";
+    std::string line = prefix + " " + chat.senderName + ": " + chat.message;
+    chatLog.push_back(line);
+    if (chatLog.size() > MAX_CHAT_LOG) chatLog.erase(chatLog.begin());
+    if (gameState == GameState::InGame) DrawMap();
+}
+
 void OnError(const PacketHeader& header, const char* payload) {
     SC_Error err;
     memcpy(&err, payload, sizeof(err));
@@ -325,6 +455,16 @@ int main() {
     client.SetHandler(SC_ATTENDANCE_INFO, OnAttendanceInfo);
     client.SetHandler(SC_ATTENDANCE_RESULT, OnAttendanceResult);
     client.SetHandler(SC_ERROR, OnError);
+    client.SetHandler(SC_CHAT, OnChatMsg);
+    client.SetHandler(SC_ITEM_DROP, OnItemDrop);
+    client.SetHandler(SC_ITEM_USE_RESULT, OnItemUseResult);
+    client.SetHandler(SC_EQUIP_RESULT, OnEquipResult);
+    client.SetHandler(SC_INVENTORY_UPDATE, OnInventoryUpdate);
+    client.SetHandler(SC_SHOP_LIST, OnShopList);
+    client.SetHandler(SC_SHOP_RESULT, OnShopResult);
+
+    SetConsoleCP(65001);
+    SetConsoleOutputCP(65001);
 
     std::cout << "=== MMORPG Simulator ===" << std::endl;
     std::cout << "Enter Account ID: ";
@@ -349,6 +489,9 @@ int main() {
     std::cout << "Logging in..." << std::endl;
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Flush leftover characters from std::getline to prevent _getch() picking them up
+    FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE));
 
     while (client.IsConnected()) {
         if (_kbhit()) {
@@ -382,6 +525,111 @@ int main() {
                     }
                     case 't': {
                         client.Send(CS_ATTENDANCE_CHECK, nullptr, 0);
+                        break;
+                    }
+                    case 'i': {
+                        showInventory = !showInventory;
+                        showShop = false;
+                        DrawMap();
+                        break;
+                    }
+                    case 'b': {
+                        showShop = !showShop;
+                        showInventory = false;
+                        if (showShop) client.Send(CS_SHOP_OPEN, nullptr, 0);
+                        else DrawMap();
+                        break;
+                    }
+                    case '1': case '2': case '3': case '4': case '5':
+                    case '6': case '7': case '8': case '9': {
+                        if (showShop) {
+                            int idx = key - '1';
+                            if (idx < shopCount) {
+                                CS_ShopBuy req{};
+                                req.itemId = shopItems[idx].itemId;
+                                client.Send(CS_SHOP_BUY, &req, sizeof(req));
+                            }
+                        }
+                        break;
+                    }
+                    case 'u': {
+                        if (showInventory) {
+                            int slot = ReadSlot("Use slot: ");
+                            if (slot >= 0 && slot < MAX_INVENTORY) {
+                                CS_ItemUse req{};
+                                req.slot = slot;
+                                client.Send(CS_ITEM_USE, &req, sizeof(req));
+                            }
+                        }
+                        break;
+                    }
+                    case 'e': {
+                        if (showInventory) {
+                            int slot = ReadSlot("Equip slot: ");
+                            if (slot >= 0 && slot < MAX_INVENTORY) {
+                                CS_ItemEquip req{};
+                                req.slot = slot;
+                                client.Send(CS_ITEM_EQUIP, &req, sizeof(req));
+                            }
+                        }
+                        break;
+                    }
+                    case 'x': {
+                        if (showInventory) {
+                            int slot = ReadSlot("Sell slot: ");
+                            if (slot >= 0 && slot < MAX_INVENTORY) {
+                                CS_ShopSell req{};
+                                req.slot = slot;
+                                client.Send(CS_SHOP_SELL, &req, sizeof(req));
+                            }
+                        }
+                        break;
+                    }
+                    case 27: { // ESC
+                        if (showInventory) { showInventory = false; DrawMap(); }
+                        if (showShop) { showShop = false; DrawMap(); }
+                        break;
+                    }
+                    case '\r': {
+                        // Chat mode - use _getwch() for UTF-8 support
+                        std::cout << "Chat (/w name msg for whisper): ";
+                        std::string input;
+                        while (true) {
+                            wchar_t wc = _getwch();
+                            if (wc == L'\r' || wc == L'\n') break;
+                            if (wc == L'\b' || wc == 127) {
+                                if (!input.empty()) {
+                                    // Find start of last UTF-8 char
+                                    size_t i = input.size() - 1;
+                                    while (i > 0 && (input[i] & 0xC0) == 0x80) i--;
+                                    int width = (input.size() - i >= 3) ? 2 : 1;
+                                    input.erase(i);
+                                    for (int j = 0; j < width; j++) std::cout << "\b \b";
+                                }
+                            } else {
+                                char buf[4] = {};
+                                int len = WideCharToMultiByte(CP_UTF8, 0, &wc, 1, buf, sizeof(buf), nullptr, nullptr);
+                                input.append(buf, len);
+                                std::cout.write(buf, len);
+                            }
+                        }
+                        std::cout << std::endl;
+                        if (!input.empty()) {
+                            CS_Chat chat{};
+                            if (input.rfind("/w ", 0) == 0) {
+                                chat.channel = 1;
+                                size_t sp = input.find(' ', 3);
+                                if (sp != std::string::npos) {
+                                    strncpy_s(chat.targetName, input.substr(3, sp - 3).c_str(), 19);
+                                    strncpy_s(chat.message, input.substr(sp + 1).c_str(), 127);
+                                    client.Send(CS_CHAT, &chat, sizeof(chat));
+                                }
+                            } else {
+                                chat.channel = 0;
+                                strncpy_s(chat.message, input.c_str(), 127);
+                                client.Send(CS_CHAT, &chat, sizeof(chat));
+                            }
+                        }
                         break;
                     }
                     case 'q': goto exit;

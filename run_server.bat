@@ -1,0 +1,3 @@
+@echo off
+echo Starting GameServer...
+build\GameServer.exe %*
