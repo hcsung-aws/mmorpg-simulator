@@ -58,6 +58,7 @@ enum PacketType : uint16_t {
     CS_ITEM_EQUIP = 0x0704,
     SC_EQUIP_RESULT = 0x0705,
     SC_INVENTORY_UPDATE = 0x0706,
+    SC_INVENTORY_LIST = 0x0707,
 
     // Shop (0x08xx)
     CS_SHOP_OPEN = 0x0801,
@@ -241,6 +242,13 @@ struct SC_InventoryUpdate {
     uint8_t slot;
     uint16_t itemId;        // 0=empty
     char itemName[32];
+};
+
+constexpr int MAX_INVENTORY = 20;
+
+struct SC_InventoryList {
+    uint8_t count;
+    SC_InventoryUpdate items[MAX_INVENTORY];
 };
 
 // Attendance

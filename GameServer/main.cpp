@@ -38,7 +38,6 @@ NPC npcs[MAX_NPC];
 uint64_t nextNpcUid = 1;
 
 // Item system
-constexpr int MAX_INVENTORY = 20;
 
 struct ItemData {
     uint16_t id;
@@ -184,19 +183,21 @@ void LoadInventory(std::shared_ptr<Session> session) {
     if (wep) player.atk = 15 + wep->atk;
     if (arm) player.def = 5 + arm->def;
 
-    // Send inventory to client
+    // Send inventory to client (bulk)
+    SC_InventoryList invList{};
     for (int i = 0; i < MAX_INVENTORY; i++) {
         if (inv.slots[i].itemTid != 0) {
             auto* item = FindItem(inv.slots[i].itemTid);
             if (item) {
-                SC_InventoryUpdate pkt{};
-                pkt.slot = i;
-                pkt.itemId = item->id;
-                strncpy_s(pkt.itemName, item->name.c_str(), 31);
-                session->Send(SC_INVENTORY_UPDATE, &pkt, sizeof(pkt));
+                auto& entry = invList.items[invList.count];
+                entry.slot = i;
+                entry.itemId = item->id;
+                strncpy_s(entry.itemName, item->name.c_str(), 31);
+                invList.count++;
             }
         }
     }
+    session->Send(SC_INVENTORY_LIST, &invList, sizeof(invList));
 
     // Send initial equipment info
     if (inv.weaponTid || inv.armorTid) {

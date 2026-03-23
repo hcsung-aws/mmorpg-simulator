@@ -58,7 +58,6 @@ constexpr int MAX_CHAT_LOG = 5;
 bool chatMode = false;
 
 // Inventory
-constexpr int MAX_INVENTORY = 20;
 struct InvSlot { uint16_t itemId = 0; char name[32] = {}; };
 InvSlot inventory[MAX_INVENTORY];
 bool showInventory = false;
@@ -363,6 +362,20 @@ void OnInventoryUpdate(const PacketHeader& header, const char* payload) {
     if (gameState == GameState::InGame) DrawMap();
 }
 
+void OnInventoryList(const PacketHeader& header, const char* payload) {
+    SC_InventoryList list;
+    memcpy(&list, payload, sizeof(list));
+    for (int i = 0; i < list.count && i < MAX_INVENTORY; i++) {
+        auto& item = list.items[i];
+        if (item.slot < MAX_INVENTORY) {
+            inventory[item.slot].itemId = item.itemId;
+            if (item.itemId) strncpy_s(inventory[item.slot].name, item.itemName, 31);
+            else memset(inventory[item.slot].name, 0, 32);
+        }
+    }
+    if (gameState == GameState::InGame) DrawMap();
+}
+
 void OnShopList(const PacketHeader& header, const char* payload) {
     SC_ShopList list;
     memcpy(&list, payload, sizeof(list));
@@ -460,6 +473,7 @@ int main() {
     client.SetHandler(SC_ITEM_USE_RESULT, OnItemUseResult);
     client.SetHandler(SC_EQUIP_RESULT, OnEquipResult);
     client.SetHandler(SC_INVENTORY_UPDATE, OnInventoryUpdate);
+    client.SetHandler(SC_INVENTORY_LIST, OnInventoryList);
     client.SetHandler(SC_SHOP_LIST, OnShopList);
     client.SetHandler(SC_SHOP_RESULT, OnShopResult);
 
