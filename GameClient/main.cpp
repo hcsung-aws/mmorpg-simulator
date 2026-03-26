@@ -445,7 +445,6 @@ void CreateCharacter() {
     std::cin.ignore();
     
     CS_CharCreate req{};
-    req.charUid = accountUid * 1000 + charList.size();
     strncpy_s(req.name, name.c_str(), 19);
     req.charType = (uint8_t)type;
     

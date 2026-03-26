@@ -452,8 +452,7 @@ void OnCharCreate(std::shared_ptr<Session> session, PacketHeader* header, char* 
     SC_CharCreateResult result{};
     
     std::wstring procCall = L"CALL spCharacterCreate(" 
-        + std::to_wstring(player.accountUid) + L", "
-        + std::to_wstring(req.charUid) + L", '"
+        + std::to_wstring(player.accountUid) + L", '"
         + std::wstring(req.name, req.name + strlen(req.name)) + L"', "
         + std::to_wstring(req.charType) + L")";
     

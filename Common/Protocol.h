@@ -102,7 +102,6 @@ struct SC_CharList {
 };
 
 struct CS_CharCreate {
-    uint64_t charUid;  // client generates: accountUid * 1000 + index
     char name[20];
     uint8_t charType;
 };
