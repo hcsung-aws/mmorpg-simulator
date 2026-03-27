@@ -2,6 +2,19 @@
 
 ## 구현 순서
 
+### Phase 1 (구현 완료)
+1. 채팅 ✅
+2. 인벤토리/아이템 ✅
+3. 상점 ✅
+4. 출석 ✅
+
+### Phase 2 (BT 테스트용 — 진행 중)
+5. 퀘스트 ← 다음
+6. 파티
+
+### Phase 3 (BT 테스트 후)
+7. 스킬/버프
+
 ### 1. 채팅 (Chat)
 - 채널: World, Whisper, Party (파티 구현 후)
 - 패킷:
@@ -37,10 +50,30 @@
 - 의존: 인벤토리 시스템
 - 난이도: 중
 
-### 4. 파티 (Party)
+### 5. 퀘스트 (Quest) ← 다음 구현
+- 퀘스트 정의: questId, name, type(kill/collect/deliver), target, count, reward
+- 퀘스트 NPC: 맵에 고정 위치, 인접 시 상호작용
+- 퀘스트 상태: Available → Accepted → InProgress → Completable → Completed
+- 진행도 자동 갱신: 몬스터 처치 시 킬 카운트, 아이템 획득 시 수집 카운트
+- 패킷:
+  - `CS_QUEST_LIST` (C2S): npcUid — 퀘스트 NPC에게 목록 요청
+  - `SC_QUEST_LIST` (S2C): quests[] (questId, name, type, status, progress, target)
+  - `CS_QUEST_ACCEPT` (C2S): questId
+  - `SC_QUEST_ACCEPT_RESULT` (S2C): success, questId, message
+  - `SC_QUEST_PROGRESS` (S2C): questId, progress, target — 자동 갱신
+  - `CS_QUEST_COMPLETE` (C2S): questId
+  - `SC_QUEST_REWARD` (S2C): success, questId, rewardGold, rewardExp, rewardItemId
+- 데이터: data/quests.json (퀘스트 정의)
+- DB: quest_progress 테이블 (CharUid, QuestId, Status, Progress)
+- 패킷 번호: 0x0Axx
+- BT 분기 포인트: 퀘스트 유무, 진행도, 완료 가능 여부
+- 난이도: 중
+
+### 6. 파티 (Party)
 - 최대 4인 파티
 - 파티원 HP/위치 동기화
 - 파티 내 EXP/드롭 분배
+- 패킷 번호: 0x0Bxx
 - 패킷:
   - `CS_PARTY_INVITE` (C2S): targetName(string20)
   - `SC_PARTY_INVITE` (S2C): inviterName(string20)
