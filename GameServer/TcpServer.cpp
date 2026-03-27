@@ -38,7 +38,10 @@ void TcpServer::DoAccept() {
         });
 }
 
+extern void OnPlayerDisconnect(SessionId id);
+
 void TcpServer::OnDisconnect(SessionId id) {
+    OnPlayerDisconnect(id);
     auto session = sessionMgr_.GetSession(id);
     if (session && session->GetPlayer().loggedIn) {
         SC_CharLeave leave{};

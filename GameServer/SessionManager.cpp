@@ -27,14 +27,15 @@ size_t SessionManager::GetSessionCount() {
 void SessionManager::Broadcast(PacketType type, const void* data, size_t size) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     for (auto& [id, session] : sessions_) {
-        session->Send(type, data, size);
+        if (session->GetPlayer().loggedIn)
+            session->Send(type, data, size);
     }
 }
 
 void SessionManager::BroadcastExcept(SessionId exceptId, PacketType type, const void* data, size_t size) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     for (auto& [id, session] : sessions_) {
-        if (id != exceptId) {
+        if (id != exceptId && session->GetPlayer().loggedIn) {
             session->Send(type, data, size);
         }
     }

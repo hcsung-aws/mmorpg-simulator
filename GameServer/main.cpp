@@ -56,6 +56,34 @@ std::vector<ItemData> g_items;
 std::vector<DropEntry> g_dropTable;
 int g_totalWeight = 0;
 
+// Quest system
+struct QuestData {
+    uint16_t id;
+    std::string name;
+    uint16_t target;
+    uint32_t rewardGold, rewardExp;
+    uint16_t rewardItemId;
+};
+
+std::vector<QuestData> g_quests;
+constexpr int16_t QUEST_NPC_X = 2, QUEST_NPC_Y = 2;
+
+struct QuestProgress {
+    uint8_t status = 0;    // 0=Available, 1=Accepted, 2=Completable, 3=Completed
+    uint16_t progress = 0;
+};
+std::map<SessionId, std::map<uint16_t, QuestProgress>> g_questProgress;
+
+// Party system
+struct Party {
+    uint32_t id = 0;
+    std::vector<SessionId> members;
+};
+uint32_t nextPartyId = 1;
+std::map<uint32_t, Party> g_parties;              // partyId -> Party
+std::map<SessionId, uint32_t> g_playerParty;      // sessionId -> partyId
+std::map<SessionId, SessionId> g_pendingInvites;   // invitee -> inviter
+
 const ItemData* FindItem(uint16_t id) {
     for (auto& item : g_items)
         if (item.id == id) return &item;
@@ -140,6 +168,50 @@ bool LoadItems(const std::string& path) {
 
     std::cout << "[Server] Loaded " << g_items.size() << " items, " << g_dropTable.size() << " drop entries" << std::endl;
     return !g_items.empty();
+}
+
+bool LoadQuests(const std::string& path) {
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+    std::string json((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+
+    auto parseStr = [&](const std::string& s, const std::string& key) -> std::string {
+        auto pos = s.find("\"" + key + "\"");
+        if (pos == std::string::npos) return "";
+        pos = s.find("\"", pos + key.size() + 2);
+        if (pos == std::string::npos) return "";
+        auto end = s.find("\"", pos + 1);
+        return s.substr(pos + 1, end - pos - 1);
+    };
+    auto parseInt = [&](const std::string& s, const std::string& key) -> int {
+        auto pos = s.find("\"" + key + "\"");
+        if (pos == std::string::npos) return 0;
+        pos = s.find(":", pos);
+        while (pos < s.size() && (s[pos] == ':' || s[pos] == ' ')) pos++;
+        return std::atoi(s.c_str() + pos);
+    };
+
+    auto arrStart = json.find("[");
+    auto arrEnd = json.find("]", arrStart);
+    std::string arr = json.substr(arrStart, arrEnd - arrStart + 1);
+
+    size_t pos = 0;
+    while ((pos = arr.find("{", pos)) != std::string::npos) {
+        auto objEnd = arr.find("}", pos);
+        std::string obj = arr.substr(pos, objEnd - pos + 1);
+        QuestData q;
+        q.id = parseInt(obj, "id");
+        q.name = parseStr(obj, "name");
+        q.target = parseInt(obj, "target");
+        q.rewardGold = parseInt(obj, "rewardGold");
+        q.rewardExp = parseInt(obj, "rewardExp");
+        q.rewardItemId = parseInt(obj, "rewardItemId");
+        g_quests.push_back(q);
+        pos = objEnd + 1;
+    }
+
+    std::cout << "[Server] Loaded " << g_quests.size() << " quests" << std::endl;
+    return !g_quests.empty();
 }
 
 void LoadInventory(std::shared_ptr<Session> session) {
@@ -239,6 +311,32 @@ void UnequipItemDB(uint64_t charUid, int slot) {
     dbConn.ExecuteProc(procCall, nullptr, nullptr);
 }
 
+void LoadQuestProgress(std::shared_ptr<Session> session) {
+    auto& qp = g_questProgress[session->GetId()];
+    qp.clear();
+    auto& player = session->GetPlayer();
+    std::wstring procCall = L"CALL spQuestLoad(" + std::to_wstring(player.charUid) + L")";
+    dbConn.ExecuteProc(procCall, nullptr,
+        [&](SQLHSTMT hStmt) -> bool {
+            SQLINTEGER questId; SQLCHAR status; SQLINTEGER progress;
+            SQLLEN ind1, ind2, ind3;
+            SQLBindCol(hStmt, 1, SQL_C_SLONG, &questId, 0, &ind1);
+            SQLBindCol(hStmt, 2, SQL_C_UTINYINT, &status, 0, &ind2);
+            SQLBindCol(hStmt, 3, SQL_C_SLONG, &progress, 0, &ind3);
+            while (SQLFetch(hStmt) == SQL_SUCCESS) {
+                qp[(uint16_t)questId] = { status, (uint16_t)progress };
+            }
+            return true;
+        });
+    std::cout << "[Server] Loaded " << qp.size() << " quest progress entries for char " << player.charUid << std::endl;
+}
+
+void SaveQuestProgress(uint64_t charUid, uint16_t questId, uint8_t status, uint16_t progress) {
+    std::wstring procCall = L"CALL spQuestSave(" + std::to_wstring(charUid) + L", "
+        + std::to_wstring(questId) + L", " + std::to_wstring(status) + L", " + std::to_wstring(progress) + L")";
+    dbConn.ExecuteProc(procCall, nullptr, nullptr);
+}
+
 uint16_t RollDrop() {
     if (g_dropTable.empty()) return 0;
     int roll = rand() % g_totalWeight;
@@ -306,6 +404,7 @@ void SendOtherPlayers(std::shared_ptr<Session> newSession) {
             auto& otherPlayer = other->GetPlayer();
             SC_CharInfo info{};
             info.charUid = otherPlayer.accountUid;
+            strncpy_s(info.name, otherPlayer.name, 31);
             info.level = otherPlayer.level;
             info.posX = otherPlayer.posX;
             info.posY = otherPlayer.posY;
@@ -318,6 +417,7 @@ void SendOtherPlayers(std::shared_ptr<Session> newSession) {
     auto& newPlayer = newSession->GetPlayer();
     SC_CharInfo info{};
     info.charUid = newPlayer.accountUid;
+    strncpy_s(info.name, newPlayer.name, 31);
     info.level = newPlayer.level;
     info.posX = newPlayer.posX;
     info.posY = newPlayer.posY;
@@ -545,6 +645,7 @@ void OnCharSelect(std::shared_ptr<Session> session, PacketHeader* header, char* 
         SendOtherPlayers(session);
         SendAttendanceInfo(session);
         LoadInventory(session);
+        LoadQuestProgress(session);
         
         std::cout << "[Server] Character selected (Lv." << level << " Gold:" << gold << ")" << std::endl;
     } else {
@@ -628,8 +729,12 @@ void OnMove(std::shared_ptr<Session> session, PacketHeader* header, char* payloa
     
     SC_CharInfo info{};
     info.charUid = player.accountUid;
+    strncpy_s(info.name, player.name, 31);
+    info.level = player.level;
     info.posX = player.posX;
     info.posY = player.posY;
+    info.hp = player.hp;
+    info.maxHp = player.maxHp;
     sessionMgr.BroadcastExcept(session->GetId(), SC_CHAR_INFO, &info, sizeof(info));
 }
 
@@ -762,6 +867,21 @@ void OnChat(std::shared_ptr<Session> session, PacketHeader* header, char* payloa
             session->Send(SC_ERROR, &err, sizeof(err));
         }
         std::cout << "[Chat] [Whisper] " << player.name << " -> " << chat.targetName << ": " << chat.message << std::endl;
+    } else if (chat.channel == 2) {
+        // Party chat
+        auto pit = g_playerParty.find(session->GetId());
+        if (pit != g_playerParty.end()) {
+            auto& party = g_parties[pit->second];
+            for (auto mid : party.members) {
+                auto ms = sessionMgr.GetSession(mid);
+                if (ms) ms->Send(SC_CHAT, &reply, sizeof(reply));
+            }
+        } else {
+            SC_Error err{}; err.errorCode = 2;
+            strcpy_s(err.message, "Not in a party");
+            session->Send(SC_ERROR, &err, sizeof(err));
+        }
+        std::cout << "[Chat] [Party] " << player.name << ": " << chat.message << std::endl;
     }
 }
 
@@ -785,13 +905,16 @@ void OnShopBuy(std::shared_ptr<Session> session, PacketHeader* header, char* pay
 
     if (!item) {
         strcpy_s(result.message, "Item not found");
+        result.remainGold = player.gold;
     } else if (player.gold < item->price) {
         strcpy_s(result.message, "Not enough gold");
+        result.remainGold = player.gold;
     } else {
         auto& inv = g_inventories[session->GetId()];
         int slot = FindEmptySlot(inv);
         if (slot < 0) {
             strcpy_s(result.message, "Inventory full");
+            result.remainGold = player.gold;
         } else {
             player.gold -= item->price;
             uint64_t newUid = AddItemToDB(player.charUid, req.itemId);
@@ -842,6 +965,311 @@ void OnShopSell(std::shared_ptr<Session> session, PacketHeader* header, char* pa
     session->Send(SC_SHOP_RESULT, &result, sizeof(result));
 }
 
+// Quest handlers
+const QuestData* FindQuest(uint16_t id) {
+    for (auto& q : g_quests)
+        if (q.id == id) return &q;
+    return nullptr;
+}
+
+bool IsNearQuestNPC(const PlayerData& player) {
+    return abs(player.posX - QUEST_NPC_X) <= 1 && abs(player.posY - QUEST_NPC_Y) <= 1;
+}
+
+void OnQuestList(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
+    auto& player = session->GetPlayer();
+    if (!IsNearQuestNPC(player)) {
+        SC_Error err{};
+        err.errorCode = 3;
+        strcpy_s(err.message, "Not near Quest NPC");
+        session->Send(SC_ERROR, &err, sizeof(err));
+        return;
+    }
+
+    auto& qp = g_questProgress[session->GetId()];
+    SC_QuestList list{};
+    for (auto& q : g_quests) {
+        if (list.count >= MAX_QUEST_LIST) break;
+        auto& entry = list.quests[list.count];
+        entry.questId = q.id;
+        strncpy_s(entry.name, q.name.c_str(), 31);
+        entry.target = q.target;
+        auto it = qp.find(q.id);
+        if (it != qp.end()) {
+            entry.status = it->second.status;
+            entry.progress = it->second.progress;
+        } else {
+            entry.status = 0; // Available
+            entry.progress = 0;
+        }
+        list.count++;
+    }
+    session->Send(SC_QUEST_LIST, &list, sizeof(list));
+}
+
+void OnQuestAccept(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
+    CS_QuestAccept req;
+    memcpy(&req, payload, sizeof(req));
+    auto& player = session->GetPlayer();
+    auto* quest = FindQuest(req.questId);
+    SC_QuestAcceptResult result{};
+    result.questId = req.questId;
+
+    if (!IsNearQuestNPC(player)) {
+        strcpy_s(result.message, "Not near Quest NPC");
+    } else if (!quest) {
+        strcpy_s(result.message, "Quest not found");
+    } else {
+        auto& qp = g_questProgress[session->GetId()];
+        auto& state = qp[req.questId];
+        if (state.status == 1 || state.status == 2) {
+            strcpy_s(result.message, "Already accepted");
+        } else if (state.status == 3) {
+            strcpy_s(result.message, "Already completed");
+        } else {
+            state.status = 1;
+            state.progress = 0;
+            SaveQuestProgress(player.charUid, req.questId, 1, 0);
+            result.success = 1;
+            strcpy_s(result.message, "Quest accepted!");
+            std::cout << "[Server] " << player.name << " accepted quest: " << quest->name << std::endl;
+        }
+    }
+    session->Send(SC_QUEST_ACCEPT_RESULT, &result, sizeof(result));
+}
+
+void OnQuestComplete(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
+    CS_QuestComplete req;
+    memcpy(&req, payload, sizeof(req));
+    auto& player = session->GetPlayer();
+    auto* quest = FindQuest(req.questId);
+    SC_QuestReward reward{};
+    reward.questId = req.questId;
+
+    if (!IsNearQuestNPC(player)) {
+        strcpy_s(reward.message, "Not near Quest NPC");
+    } else if (!quest) {
+        strcpy_s(reward.message, "Quest not found");
+    } else {
+        auto& qp = g_questProgress[session->GetId()];
+        auto it = qp.find(req.questId);
+        if (it == qp.end() || it->second.status != 2) {
+            strcpy_s(reward.message, "Quest not completable");
+        } else {
+            it->second.status = 3;
+            SaveQuestProgress(player.charUid, req.questId, 3, it->second.progress);
+
+            // Apply rewards
+            player.gold += quest->rewardGold;
+            player.exp += quest->rewardExp;
+            reward.success = 1;
+            reward.rewardGold = quest->rewardGold;
+            reward.rewardExp = quest->rewardExp;
+            reward.rewardItemId = quest->rewardItemId;
+            strcpy_s(reward.message, "Quest completed!");
+
+            // Reward item
+            if (quest->rewardItemId > 0) {
+                auto& inv = g_inventories[session->GetId()];
+                int slot = FindEmptySlot(inv);
+                if (slot >= 0) {
+                    auto* item = FindItem(quest->rewardItemId);
+                    if (item) {
+                        uint64_t newUid = AddItemToDB(player.charUid, quest->rewardItemId);
+                        inv.slots[slot].itemUid = newUid;
+                        inv.slots[slot].itemTid = quest->rewardItemId;
+                        SC_ItemDrop drop{};
+                        drop.slot = slot;
+                        drop.itemId = item->id;
+                        strncpy_s(drop.itemName, item->name.c_str(), 31);
+                        session->Send(SC_ITEM_DROP, &drop, sizeof(drop));
+                    }
+                }
+            }
+
+            SC_ExpUpdate expUp{};
+            expUp.exp = player.exp;
+            expUp.maxExp = player.maxExp;
+            session->Send(SC_EXP_UPDATE, &expUp, sizeof(expUp));
+            CheckLevelUp(session);
+            SendCharInfo(session);
+
+            std::cout << "[Server] " << player.name << " completed quest: " << quest->name << std::endl;
+        }
+    }
+    session->Send(SC_QUEST_REWARD, &reward, sizeof(reward));
+}
+
+void UpdateQuestProgress(std::shared_ptr<Session> session) {
+    auto& player = session->GetPlayer();
+    auto& qp = g_questProgress[session->GetId()];
+    for (auto& [questId, state] : qp) {
+        if (state.status != 1) continue; // only Accepted
+        auto* quest = FindQuest(questId);
+        if (!quest) continue;
+        state.progress++;
+        if (state.progress >= quest->target) {
+            state.status = 2; // Completable
+        }
+        SaveQuestProgress(player.charUid, questId, state.status, state.progress);
+        SC_QuestProgress prog{};
+        prog.questId = questId;
+        prog.progress = state.progress;
+        prog.target = quest->target;
+        session->Send(SC_QUEST_PROGRESS, &prog, sizeof(prog));
+    }
+}
+
+// Party helpers
+void SendPartyUpdate(uint32_t partyId) {
+    auto it = g_parties.find(partyId);
+    if (it == g_parties.end()) return;
+    auto& party = it->second;
+
+    SC_PartyUpdate upd{};
+    upd.memberCount = (uint8_t)party.members.size();
+    for (int i = 0; i < (int)party.members.size() && i < MAX_PARTY; i++) {
+        auto s = sessionMgr.GetSession(party.members[i]);
+        if (!s) continue;
+        auto& p = s->GetPlayer();
+        upd.members[i].charUid = p.charUid;
+        strncpy_s(upd.members[i].name, p.name, 19);
+        upd.members[i].hp = p.hp;
+        upd.members[i].maxHp = p.maxHp;
+        upd.members[i].posX = p.posX;
+        upd.members[i].posY = p.posY;
+    }
+    for (auto sid : party.members) {
+        auto s = sessionMgr.GetSession(sid);
+        if (s) s->Send(SC_PARTY_UPDATE, &upd, sizeof(upd));
+    }
+}
+
+void RemoveFromParty(SessionId sid) {
+    auto pit = g_playerParty.find(sid);
+    if (pit == g_playerParty.end()) return;
+    uint32_t partyId = pit->second;
+    g_playerParty.erase(pit);
+
+    auto it = g_parties.find(partyId);
+    if (it == g_parties.end()) return;
+    auto& members = it->second.members;
+    members.erase(std::remove(members.begin(), members.end(), sid), members.end());
+
+    // Notify remaining
+    auto s = sessionMgr.GetSession(sid);
+    uint64_t charUid = s ? s->GetPlayer().charUid : 0;
+    SC_PartyLeave leave{};
+    leave.charUid = charUid;
+    for (auto mid : members) {
+        auto ms = sessionMgr.GetSession(mid);
+        if (ms) ms->Send(SC_PARTY_LEAVE, &leave, sizeof(leave));
+    }
+
+    if (members.size() <= 1) {
+        // Disband
+        for (auto mid : members) g_playerParty.erase(mid);
+        // Notify last member
+        if (!members.empty()) {
+            SC_PartyLeave disband{};
+            disband.charUid = 0; // signal disband
+            auto ms = sessionMgr.GetSession(members[0]);
+            if (ms) ms->Send(SC_PARTY_LEAVE, &disband, sizeof(disband));
+        }
+        g_parties.erase(it);
+    } else {
+        SendPartyUpdate(partyId);
+    }
+}
+
+void OnPartyInvite(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
+    CS_PartyInvite req;
+    memcpy(&req, payload, sizeof(req));
+    auto& player = session->GetPlayer();
+
+    // Check inviter party size
+    auto pit = g_playerParty.find(session->GetId());
+    if (pit != g_playerParty.end()) {
+        auto& party = g_parties[pit->second];
+        if ((int)party.members.size() >= MAX_PARTY) {
+            SC_Error err{}; err.errorCode = 4;
+            strcpy_s(err.message, "Party is full");
+            session->Send(SC_ERROR, &err, sizeof(err));
+            return;
+        }
+    }
+
+    // Find target
+    std::shared_ptr<Session> target;
+    sessionMgr.ForEach([&](std::shared_ptr<Session> other) {
+        if (strncmp(other->GetPlayer().name, req.targetName, 20) == 0)
+            target = other;
+    });
+
+    if (!target || target->GetId() == session->GetId()) {
+        SC_Error err{}; err.errorCode = 4;
+        strcpy_s(err.message, "Player not found");
+        session->Send(SC_ERROR, &err, sizeof(err));
+        return;
+    }
+    if (g_playerParty.count(target->GetId())) {
+        SC_Error err{}; err.errorCode = 4;
+        strcpy_s(err.message, "Already in a party");
+        session->Send(SC_ERROR, &err, sizeof(err));
+        return;
+    }
+
+    g_pendingInvites[target->GetId()] = session->GetId();
+    SC_PartyInvite inv{};
+    strncpy_s(inv.inviterName, player.name, 19);
+    target->Send(SC_PARTY_INVITE, &inv, sizeof(inv));
+    std::cout << "[Server] " << player.name << " invited " << req.targetName << " to party" << std::endl;
+}
+
+void OnPartyAccept(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
+    CS_PartyAccept req;
+    memcpy(&req, payload, sizeof(req));
+
+    auto iit = g_pendingInvites.find(session->GetId());
+    if (iit == g_pendingInvites.end()) return;
+    SessionId inviterId = iit->second;
+    g_pendingInvites.erase(iit);
+
+    if (!req.accept) {
+        std::cout << "[Server] Party invite rejected" << std::endl;
+        return;
+    }
+
+    auto inviter = sessionMgr.GetSession(inviterId);
+    if (!inviter) return;
+
+    // Get or create party for inviter
+    uint32_t partyId;
+    auto pit = g_playerParty.find(inviterId);
+    if (pit != g_playerParty.end()) {
+        partyId = pit->second;
+    } else {
+        partyId = nextPartyId++;
+        g_parties[partyId].id = partyId;
+        g_parties[partyId].members.push_back(inviterId);
+        g_playerParty[inviterId] = partyId;
+    }
+
+    auto& party = g_parties[partyId];
+    if ((int)party.members.size() >= MAX_PARTY) return;
+
+    party.members.push_back(session->GetId());
+    g_playerParty[session->GetId()] = partyId;
+
+    SendPartyUpdate(partyId);
+    std::cout << "[Server] Party " << partyId << " now has " << party.members.size() << " members" << std::endl;
+}
+
+void OnPartyLeave(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
+    RemoveFromParty(session->GetId());
+    std::cout << "[Server] " << session->GetPlayer().name << " left party" << std::endl;
+}
+
 void OnAttack(std::shared_ptr<Session> session, PacketHeader* header, char* payload) {
     CS_Attack atk;
     memcpy(&atk, payload, sizeof(atk));
@@ -882,14 +1310,38 @@ void OnAttack(std::shared_ptr<Session> session, PacketHeader* header, char* payl
             sessionMgr.Broadcast(SC_NPC_DEATH, &death, sizeof(death));
             target->alive = false;
             
-            player.exp += target->expReward;
-            player.gold += target->goldReward;
-            SC_ExpUpdate expUp{};
-            expUp.exp = player.exp;
-            expUp.maxExp = player.maxExp;
-            session->Send(SC_EXP_UPDATE, &expUp, sizeof(expUp));
-            
-            CheckLevelUp(session);
+            // Party EXP/Gold sharing
+            auto partyIt = g_playerParty.find(session->GetId());
+            if (partyIt != g_playerParty.end()) {
+                auto& party = g_parties[partyIt->second];
+                int n = (int)party.members.size();
+                uint32_t sharedExp = target->expReward / n;
+                uint32_t sharedGold = target->goldReward / n;
+                for (auto mid : party.members) {
+                    auto ms = sessionMgr.GetSession(mid);
+                    if (!ms) continue;
+                    auto& mp = ms->GetPlayer();
+                    mp.exp += sharedExp;
+                    mp.gold += sharedGold;
+                    SC_ExpUpdate eu{};
+                    eu.exp = mp.exp;
+                    eu.maxExp = mp.maxExp;
+                    ms->Send(SC_EXP_UPDATE, &eu, sizeof(eu));
+                    CheckLevelUp(ms);
+                    if (mid != session->GetId()) UpdateQuestProgress(ms);
+                }
+            } else {
+                player.exp += target->expReward;
+                player.gold += target->goldReward;
+                SC_ExpUpdate expUp{};
+                expUp.exp = player.exp;
+                expUp.maxExp = player.maxExp;
+                session->Send(SC_EXP_UPDATE, &expUp, sizeof(expUp));
+                CheckLevelUp(session);
+            }
+
+            // Quest progress (kill count)
+            UpdateQuestProgress(session);
 
             // Item drop
             uint16_t dropId = RollDrop();
@@ -922,6 +1374,13 @@ void OnAttack(std::shared_ptr<Session> session, PacketHeader* header, char* payl
     }
 }
 
+void OnPlayerDisconnect(SessionId id) {
+    RemoveFromParty(id);
+    g_pendingInvites.erase(id);
+    g_inventories.erase(id);
+    g_questProgress.erase(id);
+}
+
 int main() {
     SetConsoleOutputCP(65001);
     setlocale(LC_ALL, ".UTF-8");
@@ -945,6 +1404,11 @@ int main() {
     // Load item data
     if (!LoadItems("data/items.json")) {
         std::cerr << "Failed to load items.json!" << std::endl;
+        return 1;
+    }
+
+    if (!LoadQuests("data/quests.json")) {
+        std::cerr << "Failed to load quests.json!" << std::endl;
         return 1;
     }
     
@@ -974,6 +1438,12 @@ int main() {
         packetHandler.AddHandler(CS_SHOP_OPEN, OnShopOpen);
         packetHandler.AddHandler(CS_SHOP_BUY, OnShopBuy);
         packetHandler.AddHandler(CS_SHOP_SELL, OnShopSell);
+        packetHandler.AddHandler(CS_QUEST_LIST, OnQuestList);
+        packetHandler.AddHandler(CS_QUEST_ACCEPT, OnQuestAccept);
+        packetHandler.AddHandler(CS_QUEST_COMPLETE, OnQuestComplete);
+        packetHandler.AddHandler(CS_PARTY_INVITE, OnPartyInvite);
+        packetHandler.AddHandler(CS_PARTY_ACCEPT, OnPartyAccept);
+        packetHandler.AddHandler(CS_PARTY_LEAVE, OnPartyLeave);
 
         TcpServer server(io_context, 9000, sessionMgr, packetHandler);
 

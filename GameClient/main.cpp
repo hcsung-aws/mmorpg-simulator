@@ -41,6 +41,7 @@ struct AttendanceState {
 
 struct OtherPlayer {
     uint64_t uid;
+    char name[32];
     int16_t posX, posY;
 };
 std::map<uint64_t, OtherPlayer> otherPlayers;
@@ -84,6 +85,21 @@ ShopItem shopItems[10];
 int shopCount = 0;
 bool showShop = false;
 
+// Quest
+constexpr int16_t QUEST_NPC_X = 2, QUEST_NPC_Y = 2;
+struct QuestEntry { uint16_t questId; char name[32]; uint8_t status; uint16_t progress, target; };
+QuestEntry questEntries[MAX_QUEST_LIST];
+int questCount = 0;
+bool showQuestList = false;
+bool showQuestTracker = false;
+
+// Party
+struct PartyMember { uint64_t charUid; char name[20]; uint16_t hp, maxHp; int16_t posX, posY; };
+PartyMember partyMembers[MAX_PARTY];
+int partyCount = 0;
+bool pendingInvite = false;
+char inviterName[20] = {};
+
 void DrawCharSelect() {
     system("cls");
     std::cout << "=== Character Select ===" << std::endl;
@@ -114,6 +130,8 @@ void DrawMap() {
             char c = '.';
             if (x == myPlayer.posX && y == myPlayer.posY) {
                 c = '@';
+            } else if (x == QUEST_NPC_X && y == QUEST_NPC_Y) {
+                c = 'Q';
             } else {
                 for (auto& [uid, p] : otherPlayers) {
                     if (p.posX == x && p.posY == y) { c = 'P'; break; }
@@ -134,6 +152,9 @@ void DrawMap() {
     std::cout << "EXP: " << myPlayer.exp << "/" << myPlayer.maxExp;
     std::cout << " | Gold: " << myPlayer.gold;
     std::cout << " | NPCs:" << npcs.size() << " Players:" << (otherPlayers.size() + 1) << "\n";
+    for (auto& [uid, p] : otherPlayers) {
+        if (p.name[0]) std::cout << "  [P] " << p.name << " (" << p.posX << "," << p.posY << ")\n";
+    }
     if (!attendance.todayAttended) {
         std::cout << "[T] Attendance Check (+" << attendance.rewardGold << " Gold)\n";
     }
@@ -155,8 +176,38 @@ void DrawMap() {
             std::cout << " " << (i+1) << ": " << shopItems[i].name << " (" << shopItems[i].price << "G)\n";
         std::cout << "-------------------------------------------\n";
     }
-    std::cout << "@ = You, P = Other Player, N = NPC\n";
-    std::cout << "WASD=Move SPACE=Attack I=Inventory B=Shop T=Attendance ENTER=Chat Q=Quit\n";
+    if (partyCount > 0) {
+        std::cout << "[Party] ";
+        for (int i = 0; i < partyCount; i++) {
+            if (i > 0) std::cout << " | ";
+            std::cout << partyMembers[i].name << " HP:" << partyMembers[i].hp << "/" << partyMembers[i].maxHp;
+        }
+        std::cout << "\n";
+    }
+    if (pendingInvite) {
+        std::cout << "*** " << inviterName << " invited you to party! (Y=Accept N=Reject) ***\n";
+    }
+    if (showQuestList) {
+        std::cout << "--- Quests (1-9=Accept/Complete ESC=Close) ---\n";
+        for (int i = 0; i < questCount; i++) {
+            auto& q = questEntries[i];
+            std::cout << " " << (i+1) << ". " << q.name << " (Kill " << q.target << ")";
+            if (q.status == 0) std::cout << " [Available]";
+            else if (q.status == 1) std::cout << " [" << q.progress << "/" << q.target << " In Progress]";
+            else if (q.status == 2) std::cout << " [" << q.progress << "/" << q.target << " Complete!]";
+            else if (q.status == 3) std::cout << " [Completed]";
+            std::cout << "\n";
+        }
+        std::cout << "-----------------------------------------------\n";
+    }
+    // Quest tracker
+    for (int i = 0; i < questCount; i++) {
+        auto& q = questEntries[i];
+        if (q.status == 1) std::cout << "[Quest] " << q.name << ": " << q.progress << "/" << q.target << "\n";
+        else if (q.status == 2) std::cout << "[Quest] " << q.name << ": " << q.progress << "/" << q.target << " COMPLETE!\n";
+    }
+    std::cout << "@ = You, P = Other Player, N = NPC, Q = Quest NPC\n";
+    std::cout << "WASD=Move SPACE=Attack I=Inventory B=Shop J=Quest P=Party T=Attendance ENTER=Chat Q=Quit\n";
 }
 
 void OnLoginResult(const PacketHeader& header, const char* payload) {
@@ -222,7 +273,11 @@ void OnCharInfo(const PacketHeader& header, const char* payload) {
         myPlayer.gold = info.gold;
         DrawMap();
     } else {
-        otherPlayers[info.charUid] = {info.charUid, info.posX, info.posY};
+        auto& op = otherPlayers[info.charUid];
+        op.uid = info.charUid;
+        strncpy_s(op.name, info.name, 31);
+        op.posX = info.posX;
+        op.posY = info.posY;
         if (gameState == GameState::InGame) DrawMap();
     }
 }
@@ -402,10 +457,111 @@ void OnShopResult(const PacketHeader& header, const char* payload) {
     if (gameState == GameState::InGame) DrawMap();
 }
 
+void OnQuestListResult(const PacketHeader& header, const char* payload) {
+    SC_QuestList list;
+    memcpy(&list, payload, sizeof(list));
+    questCount = list.count;
+    for (int i = 0; i < questCount; i++) {
+        questEntries[i].questId = list.quests[i].questId;
+        strncpy_s(questEntries[i].name, list.quests[i].name, 31);
+        questEntries[i].status = list.quests[i].status;
+        questEntries[i].progress = list.quests[i].progress;
+        questEntries[i].target = list.quests[i].target;
+    }
+    showQuestList = true;
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnQuestAcceptResult(const PacketHeader& header, const char* payload) {
+    SC_QuestAcceptResult res;
+    memcpy(&res, payload, sizeof(res));
+    lastMsg = std::string(res.message);
+    if (res.success) {
+        // Update local quest entry
+        for (int i = 0; i < questCount; i++) {
+            if (questEntries[i].questId == res.questId) {
+                questEntries[i].status = 1;
+                questEntries[i].progress = 0;
+                break;
+            }
+        }
+    }
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnQuestProgressUpdate(const PacketHeader& header, const char* payload) {
+    SC_QuestProgress prog;
+    memcpy(&prog, payload, sizeof(prog));
+    for (int i = 0; i < questCount; i++) {
+        if (questEntries[i].questId == prog.questId) {
+            questEntries[i].progress = prog.progress;
+            questEntries[i].target = prog.target;
+            if (prog.progress >= prog.target) questEntries[i].status = 2;
+            break;
+        }
+    }
+    lastMsg = "[Quest] Progress: " + std::to_string(prog.progress) + "/" + std::to_string(prog.target);
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnQuestRewardResult(const PacketHeader& header, const char* payload) {
+    SC_QuestReward rew;
+    memcpy(&rew, payload, sizeof(rew));
+    if (rew.success) {
+        for (int i = 0; i < questCount; i++) {
+            if (questEntries[i].questId == rew.questId) {
+                questEntries[i].status = 3;
+                break;
+            }
+        }
+        lastMsg = std::string(rew.message) + " +" + std::to_string(rew.rewardGold) + "G +" + std::to_string(rew.rewardExp) + "EXP";
+    } else {
+        lastMsg = std::string(rew.message);
+    }
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnPartyInviteRecv(const PacketHeader& header, const char* payload) {
+    SC_PartyInvite inv;
+    memcpy(&inv, payload, sizeof(inv));
+    pendingInvite = true;
+    strncpy_s(inviterName, inv.inviterName, 19);
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnPartyUpdateRecv(const PacketHeader& header, const char* payload) {
+    SC_PartyUpdate upd;
+    memcpy(&upd, payload, sizeof(upd));
+    partyCount = upd.memberCount;
+    for (int i = 0; i < partyCount && i < MAX_PARTY; i++) {
+        partyMembers[i].charUid = upd.members[i].charUid;
+        strncpy_s(partyMembers[i].name, upd.members[i].name, 19);
+        partyMembers[i].hp = upd.members[i].hp;
+        partyMembers[i].maxHp = upd.members[i].maxHp;
+        partyMembers[i].posX = upd.members[i].posX;
+        partyMembers[i].posY = upd.members[i].posY;
+    }
+    lastMsg = "Party updated (" + std::to_string(partyCount) + " members)";
+    if (gameState == GameState::InGame) DrawMap();
+}
+
+void OnPartyLeaveRecv(const PacketHeader& header, const char* payload) {
+    SC_PartyLeave leave;
+    memcpy(&leave, payload, sizeof(leave));
+    if (leave.charUid == 0) {
+        // Disband
+        partyCount = 0;
+        lastMsg = "Party disbanded";
+    } else {
+        lastMsg = "A member left the party";
+    }
+    if (gameState == GameState::InGame) DrawMap();
+}
+
 void OnChatMsg(const PacketHeader& header, const char* payload) {
     SC_Chat chat;
     memcpy(&chat, payload, sizeof(chat));
-    std::string prefix = (chat.channel == 0) ? "[World]" : "[Whisper]";
+    std::string prefix = (chat.channel == 0) ? "[World]" : (chat.channel == 2) ? "[Party]" : "[Whisper]";
     std::string line = prefix + " " + chat.senderName + ": " + chat.message;
     chatLog.push_back(line);
     if (chatLog.size() > MAX_CHAT_LOG) chatLog.erase(chatLog.begin());
@@ -475,6 +631,13 @@ int main() {
     client.SetHandler(SC_INVENTORY_LIST, OnInventoryList);
     client.SetHandler(SC_SHOP_LIST, OnShopList);
     client.SetHandler(SC_SHOP_RESULT, OnShopResult);
+    client.SetHandler(SC_QUEST_LIST, OnQuestListResult);
+    client.SetHandler(SC_QUEST_ACCEPT_RESULT, OnQuestAcceptResult);
+    client.SetHandler(SC_QUEST_PROGRESS, OnQuestProgressUpdate);
+    client.SetHandler(SC_QUEST_REWARD, OnQuestRewardResult);
+    client.SetHandler(SC_PARTY_INVITE, OnPartyInviteRecv);
+    client.SetHandler(SC_PARTY_UPDATE, OnPartyUpdateRecv);
+    client.SetHandler(SC_PARTY_LEAVE, OnPartyLeaveRecv);
 
     SetConsoleCP(65001);
     SetConsoleOutputCP(65001);
@@ -540,6 +703,44 @@ int main() {
                         client.Send(CS_ATTENDANCE_CHECK, nullptr, 0);
                         break;
                     }
+                    case 'p': {
+                        if (partyCount > 0) {
+                            // Leave party
+                            client.Send(CS_PARTY_LEAVE, nullptr, 0);
+                            partyCount = 0;
+                            lastMsg = "Left party";
+                            DrawMap();
+                        } else {
+                            // Invite
+                            std::cout << "Invite player: ";
+                            std::string name;
+                            std::cin >> name;
+                            std::cin.ignore();
+                            FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE));
+                            CS_PartyInvite req{};
+                            strncpy_s(req.targetName, name.c_str(), 19);
+                            client.Send(CS_PARTY_INVITE, &req, sizeof(req));
+                        }
+                        break;
+                    }
+                    case 'y': {
+                        if (pendingInvite) {
+                            CS_PartyAccept req{}; req.accept = 1;
+                            client.Send(CS_PARTY_ACCEPT, &req, sizeof(req));
+                            pendingInvite = false;
+                        }
+                        break;
+                    }
+                    case 'n': {
+                        if (pendingInvite) {
+                            CS_PartyAccept req{}; req.accept = 0;
+                            client.Send(CS_PARTY_ACCEPT, &req, sizeof(req));
+                            pendingInvite = false;
+                            lastMsg = "Invite rejected";
+                            DrawMap();
+                        }
+                        break;
+                    }
                     case 'i': {
                         showInventory = !showInventory;
                         showShop = false;
@@ -549,13 +750,49 @@ int main() {
                     case 'b': {
                         showShop = !showShop;
                         showInventory = false;
+                        showQuestList = false;
                         if (showShop) client.Send(CS_SHOP_OPEN, nullptr, 0);
                         else DrawMap();
                         break;
                     }
+                    case 'j': {
+                        if (showQuestList) {
+                            showQuestList = false;
+                            DrawMap();
+                        } else {
+                            bool nearNPC = abs(myPlayer.posX - QUEST_NPC_X) <= 1 && abs(myPlayer.posY - QUEST_NPC_Y) <= 1;
+                            if (nearNPC) {
+                                showQuestList = true;
+                                showInventory = false;
+                                showShop = false;
+                                CS_QuestList req{};
+                                req.npcUid = 0;
+                                client.Send(CS_QUEST_LIST, &req, sizeof(req));
+                            } else {
+                                // Toggle tracker visibility (already shown in HUD if quests active)
+                                lastMsg = "Move near Quest NPC (Q) to manage quests";
+                                DrawMap();
+                            }
+                        }
+                        break;
+                    }
                     case '1': case '2': case '3': case '4': case '5':
                     case '6': case '7': case '8': case '9': {
-                        if (showShop) {
+                        if (showQuestList) {
+                            int idx = key - '1';
+                            if (idx < questCount) {
+                                auto& q = questEntries[idx];
+                                if (q.status == 0) {
+                                    CS_QuestAccept req{};
+                                    req.questId = q.questId;
+                                    client.Send(CS_QUEST_ACCEPT, &req, sizeof(req));
+                                } else if (q.status == 2) {
+                                    CS_QuestComplete req{};
+                                    req.questId = q.questId;
+                                    client.Send(CS_QUEST_COMPLETE, &req, sizeof(req));
+                                }
+                            }
+                        } else if (showShop) {
                             int idx = key - '1';
                             if (idx < shopCount) {
                                 CS_ShopBuy req{};
@@ -601,6 +838,7 @@ int main() {
                     case 27: { // ESC
                         if (showInventory) { showInventory = false; DrawMap(); }
                         if (showShop) { showShop = false; DrawMap(); }
+                        if (showQuestList) { showQuestList = false; DrawMap(); }
                         break;
                     }
                     case '\r': {
@@ -637,6 +875,10 @@ int main() {
                                     strncpy_s(chat.message, input.substr(sp + 1).c_str(), 127);
                                     client.Send(CS_CHAT, &chat, sizeof(chat));
                                 }
+                            } else if (input.rfind("/p ", 0) == 0) {
+                                chat.channel = 2;
+                                strncpy_s(chat.message, input.substr(3).c_str(), 127);
+                                client.Send(CS_CHAT, &chat, sizeof(chat));
                             } else {
                                 chat.channel = 0;
                                 strncpy_s(chat.message, input.c_str(), 127);

@@ -67,6 +67,23 @@ enum PacketType : uint16_t {
     SC_SHOP_RESULT = 0x0804,
     CS_SHOP_SELL = 0x0805,
 
+    // Quest (0x0Axx)
+    CS_QUEST_LIST = 0x0A01,
+    SC_QUEST_LIST = 0x0A02,
+    CS_QUEST_ACCEPT = 0x0A03,
+    SC_QUEST_ACCEPT_RESULT = 0x0A04,
+    SC_QUEST_PROGRESS = 0x0A05,
+    CS_QUEST_COMPLETE = 0x0A06,
+    SC_QUEST_REWARD = 0x0A07,
+
+    // Party (0x0Bxx)
+    CS_PARTY_INVITE = 0x0B01,
+    SC_PARTY_INVITE = 0x0B02,
+    CS_PARTY_ACCEPT = 0x0B03,
+    SC_PARTY_UPDATE = 0x0B04,
+    CS_PARTY_LEAVE = 0x0B05,
+    SC_PARTY_LEAVE = 0x0B06,
+
     // System (0xFFxx)
     CS_HEARTBEAT = 0xFF01,
     SC_HEARTBEAT = 0xFF02,
@@ -286,6 +303,88 @@ struct SC_ShopResult {
 
 struct CS_ShopSell {
     uint8_t slot;
+};
+
+// Quest
+struct CS_QuestList {
+    uint64_t npcUid;
+};
+
+struct SC_QuestEntry {
+    uint16_t questId;
+    char name[32];
+    uint8_t status;       // 0=Available, 1=Accepted, 2=Completable, 3=Completed
+    uint16_t progress;
+    uint16_t target;
+};
+
+constexpr int MAX_QUEST_LIST = 10;
+
+struct SC_QuestList {
+    uint8_t count;
+    SC_QuestEntry quests[MAX_QUEST_LIST];
+};
+
+struct CS_QuestAccept {
+    uint16_t questId;
+};
+
+struct SC_QuestAcceptResult {
+    uint8_t success;
+    uint16_t questId;
+    char message[64];
+};
+
+struct SC_QuestProgress {
+    uint16_t questId;
+    uint16_t progress;
+    uint16_t target;
+};
+
+struct CS_QuestComplete {
+    uint16_t questId;
+};
+
+struct SC_QuestReward {
+    uint8_t success;
+    uint16_t questId;
+    uint32_t rewardGold;
+    uint32_t rewardExp;
+    uint16_t rewardItemId;
+    char message[64];
+};
+
+// Party
+struct CS_PartyInvite {
+    char targetName[20];
+};
+
+struct SC_PartyInvite {
+    char inviterName[20];
+};
+
+struct CS_PartyAccept {
+    uint8_t accept;  // 1=accept, 0=reject
+};
+
+struct SC_PartyMember {
+    uint64_t charUid;
+    char name[20];
+    uint16_t hp;
+    uint16_t maxHp;
+    int16_t posX;
+    int16_t posY;
+};
+
+constexpr int MAX_PARTY = 4;
+
+struct SC_PartyUpdate {
+    uint8_t memberCount;
+    SC_PartyMember members[MAX_PARTY];
+};
+
+struct SC_PartyLeave {
+    uint64_t charUid;
 };
 
 #pragma pack(pop)

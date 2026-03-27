@@ -1,0 +1,31 @@
+{
+  "quests": [
+    {
+      "id": 1,
+      "name": "Goblin Slayer",
+      "type": "kill",
+      "target": 3,
+      "rewardGold": 100,
+      "rewardExp": 50,
+      "rewardItemId": 0
+    },
+    {
+      "id": 2,
+      "name": "Monster Hunter",
+      "type": "kill",
+      "target": 5,
+      "rewardGold": 200,
+      "rewardExp": 100,
+      "rewardItemId": 5
+    },
+    {
+      "id": 3,
+      "name": "Champion",
+      "type": "kill",
+      "target": 10,
+      "rewardGold": 500,
+      "rewardExp": 300,
+      "rewardItemId": 2
+    }
+  ]
+}
